@@ -1,52 +1,78 @@
-import os
 from dotenv import load_dotenv
 import gradio as gr
 import transformers
 import torch
 
 load_dotenv()
-model_id = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 pipeline = transformers.pipeline(
     "text-generation",
     model=model_id,
     model_kwargs={"torch_dtype": torch.bfloat16},
-    device_map="auto",
+    device="cuda",
 )
 
+messages = [
+    {
+        "role":"system",
+        "content":"You are a pirate chatbot who always responds in pirate speak"
+    },
+    {
+        "role":"user",
+        "content":"Who are you?"
+    }
+]
+
+prompt = pipeline.tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+)
+
+terminators = [
+    pipeline.tokenizer.eos_token_id,
+    pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+]
+
+outputs = pipeline(
+    prompt,
+    max_new_tokens = 256,
+    eos_token_id = terminators,
+    do_sample = True,
+    temperature = 0.6,
+    top_p = 0.9,
+)
+
+print(outputs[0]["generated_text"][len(prompt):])
+
 # Define a function to handle chatbot interactions
-def chat_with_bot(user_input, chat_history):
-    # Append user input to chat history
-    chat_history.append({"role": "user", "content": user_input})
-    
-    # Generate the response
-    inputs = [{"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"}] + chat_history
-    outputs = pipeline(inputs, max_new_tokens=256)
-    
-    # Extract the generated text
-    generated_text = outputs[0]["generated_text"][-1]
-    
-    # Append chatbot response to chat history
-    chat_history.append({"role": "assistant", "content": generated_text})
-    
-    # Return the updated chat history
-    return chat_history, generated_text
+def chat_function(message, history, system_prompt, max_new_tokens, temperature):
+    messages = [{"role":"system","content":system_prompt},
+                {"role":"user", "content":message}]
+    prompt = pipeline.tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,)
+    terminators = [
+        pipeline.tokenizer.eos_token_id,
+        pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")]
+    outputs = pipeline(
+        prompt,
+        max_new_tokens = max_new_tokens,
+        eos_token_id = terminators,
+        do_sample = True,
+        temperature = temperature + 0.1,
+        top_p = 0.9,)
+    return outputs[0]["generated_text"][len(prompt):]
 
-# Set up the Gradio interface
-with gr.Blocks() as demo:
-    gr.HTML("<h1 style='text-align: center;'>Llama3.1 Pirate Chatbot</h1>")
-    
-    with gr.Row():
-        chatbot = gr.Chatbot(height=450, label="Chatbot")
-    
-    with gr.Row():
-        user_input = gr.Textbox(placeholder="Type your message and press Enter", scale=7, label="User Message")
-        clear = gr.Button("Clear Chat")
-    
-    # Define the interactions
-    user_input.submit(chat_with_bot, [user_input, chatbot], [chatbot, user_input], queue=False)
-    clear.click(lambda: ([], ""), None, [chatbot, user_input], queue=False)
-
-# Launch the Gradio interface
-if __name__ == "__main__":
-    demo.launch(debug=True)
+gr.ChatInterface(
+    chat_function,
+    textbox=gr.Textbox(placeholder="Enter message here", container=False, scale = 7),
+    chatbot=gr.Chatbot(height=400),
+    additional_inputs=[
+        gr.Textbox("You are helpful AI", label="System Prompt"),
+        gr.Slider(500,4000, label="Max New Tokens"),
+        gr.Slider(0,1, label="Temperature")
+    ]
+    ).launch()
